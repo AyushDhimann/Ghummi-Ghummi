@@ -17,7 +17,7 @@ class Game {
         this.cameraPosition = new THREE.Vector3();
 
         this.speedElement = document.getElementById('speed-value');
-        this.speedElement = document.getElementById('distance-value');
+        this.distanceElement = document.getElementById('distance-value');
 
         this.animate = this.animate.bind(this);
         this.onWindowResize = this.onWindowResize.bind(this);
@@ -153,8 +153,12 @@ class Game {
             const speed = this.vehicle.getCurrentSpeedKmH();
             this.speedElement.textContent = speed;
         }
-    }
 
+        if (this.vehicle && this.distanceElement) {
+            const distance = this.vehicle.getDistanceTraveled();
+            this.distanceElement.textContent = distance;
+        }
+    }
     animate() {
          const dt = Math.min(this.clock.getDelta(), 0.05);
          requestAnimationFrame(this.animate);
