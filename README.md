@@ -14,8 +14,8 @@
 
 This project is a basic 3D car driving simulation built using modern web technologies. It features a car controlled by the player driving on procedurally generated terrain. The project utilizes Three.js for rendering and Cannon-es for physics simulation.
 
-<!-- Add a screenshot or GIF here! -->
-<!-- Example: ![Game Screenshot](docs/screenshot.png) -->
+![car](https://github.com/user-attachments/assets/8448e6ec-290a-4b74-8059-ee9f7bfb453e)
+
 
 ## Features
 
@@ -56,7 +56,6 @@ Before you begin, ensure you have the following installed on your system:
 1.  **Clone the repository:**
     ```bash
     git clone https://github.com/AyushDhimann/Ghummi-Ghummi
-    # or download the ZIP file
     ```
     
 2.  **Navigate to the project directory:**
@@ -113,7 +112,4 @@ Before you begin, ensure you have the following installed on your system:
 
 ## License
 
-This project is likely under the MIT License (or choose another if you prefer). You should add a `LICENSE` file to the repository.
-
-Example:
-Distributed under the MIT License. See `LICENSE` file for more information.
+This project is under the [GPL-3.0 LICENSE](https://github.com/AyushDhimann/Ghummi-Ghummi?tab=GPL-3.0-1-ov-file)
