@@ -6,9 +6,9 @@ import { lerp, dampingFactor } from './utils.js';
 
 // --- Vehicle Physics Constants ---
 // Engine & Brakes
-const ENGINE_FORCE_FORWARD = 450;
-const ENGINE_FORCE_BACKWARD = 100;
-const BRAKE_FORCE = 80;
+const ENGINE_FORCE_FORWARD = 500;
+const ENGINE_FORCE_BACKWARD = 200;
+const BRAKE_FORCE = 10;
 
 // Steering
 const MAX_STEER_ANGLE = Math.PI / 6.0;
