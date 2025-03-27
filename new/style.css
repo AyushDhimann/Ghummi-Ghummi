@@ -1,0 +1,82 @@
+body {
+    margin: 0;
+    overflow: hidden; /* Prevent scrollbars */
+    background-color: #000;
+    color: white;
+    font-family: Arial, sans-serif;
+}
+
+#c {
+    display: block; /* Remove potential extra space below canvas */
+}
+
+#ui-container {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    padding: 10px;
+    box-sizing: border-box; /* Include padding in width */
+    pointer-events: none; /* Allow clicking through UI */
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+}
+
+#info {
+    background-color: rgba(0, 0, 0, 0.6);
+    padding: 8px 12px;
+    border-radius: 5px;
+    font-size: 0.9em;
+    max-width: 200px; /* Limit width */
+}
+
+#speedometer {
+    background-color: rgba(0, 0, 0, 0.6);
+    padding: 8px 12px;
+    border-radius: 5px;
+    font-size: 1.1em;
+    font-weight: bold;
+    margin-right: 10px; /* Add some margin if needed */
+}
+
+#speed-value {
+    min-width: 40px; /* Reserve space for speed value */
+    display: inline-block;
+    text-align: right;
+}
+
+#distance-meter {
+    position: absolute;
+    bottom: 50px;
+    left: 20px;
+    color: white;
+    font-family: 'Arial', sans-serif;
+    font-size: 18px;
+    text-shadow: 2px 2px 2px rgba(0, 0, 0, 0.5);
+}
+
+
+/* Add this to your style.css */
+#stats-container {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    background-color: rgba(0, 0, 0, 0.6);
+    padding: 8px 12px;
+    border-radius: 5px;
+}
+
+#speedometer {
+    background-color: transparent;
+    padding: 0;
+    margin: 0;
+    font-size: 1.1em;
+    font-weight: bold;
+}
+
+#distance-meter {
+    position: static;
+    font-size: 1em;
+    text-shadow: none;
+}
