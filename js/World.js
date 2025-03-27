@@ -1,26 +1,30 @@
+// js/World.js
+
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { createNoise2D } from 'simplex-noise';
 
-// --- Constants ---
-const TERRAIN_SIZE = 300;
-const TERRAIN_RESOLUTION = 150;
+// --- Terrain Constants ---
+const TERRAIN_SIZE = 800;
+const TERRAIN_RESOLUTION = 128;
 const HALF_SIZE = TERRAIN_SIZE / 2;
 
-// Noise parameters (unchanged)
-const NOISE_HEIGHT_LARGE = 4;
-const NOISE_HEIGHT_MEDIUM = 0.02;
-const NOISE_HEIGHT_SMALL = 0.05;
-const NOISE_SCALE_LARGE = 0.02;
-const NOISE_SCALE_MEDIUM = 0.08;
-const NOISE_SCALE_SMALL = 0.15;
-const ROAD_FLATTEN_FACTOR = 0.15;
+// --- Noise Parameters ---
+const NOISE_HEIGHT_SCALE = 1.0;
+const NOISE_HEIGHT_LARGE = 5 * NOISE_HEIGHT_SCALE;
+const NOISE_HEIGHT_MEDIUM = 0.4 * NOISE_HEIGHT_SCALE;
+const NOISE_HEIGHT_SMALL = 0.1 * NOISE_HEIGHT_SCALE;
+const NOISE_SCALE_LARGE = 0.015;
+const NOISE_SCALE_MEDIUM = 0.06;
+const NOISE_SCALE_SMALL = 0.2;
+const ROAD_FLATTEN_FACTOR = 0.1;
 
+// --- Color Gradient ---
 const COLOR_STOPS = [
     { h: -5, color: new THREE.Color(0x4466aa) }, { h: -0.5, color: new THREE.Color(0x6699cc) },
-    { h: 0, color: new THREE.Color(0xaa9977) }, { h: 1, color: new THREE.Color(0x66aa66) },
-    { h: 3, color: new THREE.Color(0x887766) }, { h: 5, color: new THREE.Color(0xaaaaaa) },
-    { h: 8, color: new THREE.Color(0xffffff) },
+    { h: 0, color: new THREE.Color(0xdec070) }, { h: 1, color: new THREE.Color(0x558844) },
+    { h: 4, color: new THREE.Color(0x776655) }, { h: 7, color: new THREE.Color(0xaaaaaa) },
+    { h: 10, color: new THREE.Color(0xffffff) },
 ];
 
 export class World {
@@ -28,156 +32,122 @@ export class World {
         this.scene = scene;
         this.physicsWorld = physicsWorld;
         this.noise = createNoise2D();
+
         this.terrainMesh = null;
         this.terrainBody = null;
+        this.groundMaterial = null;
+        this.terrainMaterial = null;
 
-        // --- Physics Materials ---
-        this.groundMaterial = new CANNON.Material('ground');
-        const defaultMaterial = this.physicsWorld.defaultMaterial;
+        this.createPhysicsMaterials();
+        this.createVisualMaterial();
+        this.createTerrain();
+        // this.createDebugHelpers();
 
-        // Improve friction and reduce sinking by adjusting contact properties
+        console.log("World initialized.");
+    }
+
+    createPhysicsMaterials() {
+        this.groundMaterial = new CANNON.Material('groundMaterial');
+        // Find the default material used by other objects (like the vehicle)
+        const defaultMaterial = this.physicsWorld.defaultContactMaterial.materials.find(m => m !== this.groundMaterial) || this.physicsWorld.defaultMaterial;
+
+
         const groundDefaultContactMaterial = new CANNON.ContactMaterial(
-            this.groundMaterial, defaultMaterial, {
-                friction: 0.6,           // Increased from 0.4
-                restitution: 0.05,      // Reduced from 0.1
-                contactEquationStiffness: 1e8,   // Add stiffness
-                contactEquationRelaxation: 3     // Add relaxation
+            this.groundMaterial,
+            defaultMaterial,
+            {
+                friction: 1.0,           // High friction
+                restitution: 0.0,        // No bounce
+                contactEquationStiffness: 1e9, // High stiffness
+                contactEquationRelaxation: 3,
+                frictionEquationStiffness: 1e9, // High friction stiffness
+                frictionEquationRelaxation: 3,
             }
         );
         this.physicsWorld.addContactMaterial(groundDefaultContactMaterial);
+        console.log("Physics materials created for World (with increased stiffness/friction).");
+    }
 
-        // --- Visual Material --- (Shared)
+    createVisualMaterial() {
         this.terrainMaterial = new THREE.MeshStandardMaterial({
-            wireframe: false,
             flatShading: false,
-            metalness: 0.1,
+            metalness: 0.05,
             roughness: 0.9,
             vertexColors: true
         });
-
-        // Create the terrain immediately
-        this.createTerrain();
-
-        // Add debug helper for development
-        this.createDebugHelpers();
+        console.log("Visual material created for World.");
     }
 
     update(playerPosition) {
-        // No dynamic loading needed for single terrain
-        // Could add debug visualization if needed here
+        // Static terrain
     }
 
     createDebugHelpers() {
-        // Add a small sphere at origin for reference
         const originHelper = new THREE.Mesh(
-            new THREE.SphereGeometry(0.5, 16, 16),
-            new THREE.MeshBasicMaterial({ color: 0xff0000 })
+            new THREE.SphereGeometry(1, 16, 16),
+            new THREE.MeshBasicMaterial({ color: 0xff0000, wireframe: true })
         );
-        originHelper.position.set(0, 0, 0);
+        originHelper.position.set(0, 0.1, 0);
         this.scene.add(originHelper);
+        const axesHelper = new THREE.AxesHelper(10);
+        this.scene.add(axesHelper);
+        console.log("Debug helpers added.");
     }
 
     createTerrain() {
-        console.log("Generating terrain...");
+        console.log(`Generating terrain (${TERRAIN_RESOLUTION}x${TERRAIN_RESOLUTION})...`);
         const segmentSize = TERRAIN_SIZE / TERRAIN_RESOLUTION;
 
-        // Generate height data first (keep this part)
-        const heightData = this.generateHeightData();
-
-        // 1. Create visual terrain first (almost identical to your current code)
-        console.log("Creating visual mesh...");
         const geometry = new THREE.BufferGeometry();
-
         const vertices = [];
         const indices = [];
         const colors = [];
 
-        // Build vertex grid
+        console.time("VertexGeneration");
         for (let z = 0; z <= TERRAIN_RESOLUTION; z++) {
             for (let x = 0; x <= TERRAIN_RESOLUTION; x++) {
-                // Get world coordinates
                 const worldX = -HALF_SIZE + x * segmentSize;
                 const worldZ = -HALF_SIZE + z * segmentSize;
-
-                // Get height
                 const height = this.calculateHeight(worldX, worldZ);
-
-                // Add vertex
                 vertices.push(worldX, height, worldZ);
-
-                // Set color
                 const color = this.getColorForHeight(height);
                 colors.push(color.r, color.g, color.b);
-
-                // Create triangle indices (same as original)
                 if (x < TERRAIN_RESOLUTION && z < TERRAIN_RESOLUTION) {
-                    const topLeft = z * (TERRAIN_RESOLUTION + 1) + x;
-                    const topRight = topLeft + 1;
-                    const bottomLeft = (z + 1) * (TERRAIN_RESOLUTION + 1) + x;
-                    const bottomRight = bottomLeft + 1;
-
-                    indices.push(topLeft, bottomLeft, topRight);
-                    indices.push(topRight, bottomLeft, bottomRight);
+                    const tl = z * (TERRAIN_RESOLUTION + 1) + x; const tr = tl + 1;
+                    const bl = (z + 1) * (TERRAIN_RESOLUTION + 1) + x; const br = bl + 1;
+                    indices.push(tl, bl, tr); indices.push(tr, bl, br);
                 }
             }
         }
+        console.timeEnd("VertexGeneration");
 
-        // Set geometry attributes
         geometry.setIndex(indices);
         geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
         geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+        console.time("NormalCalculation");
         geometry.computeVertexNormals();
+        console.timeEnd("NormalCalculation");
 
-        // Create visual mesh
         this.terrainMesh = new THREE.Mesh(geometry, this.terrainMaterial);
         this.terrainMesh.receiveShadow = true;
         this.scene.add(this.terrainMesh);
+        console.log("Visual terrain mesh created.");
 
-        // 2. Create physics using TRIMESH instead of Heightfield
-        console.log("Creating physics trimesh...");
-
-        // Extract vertices and indices from the geometry we just created
-        const vertArray = geometry.attributes.position.array;
-        const indexArray = geometry.index.array;
-
-        // Create trimesh shape
-        const trimeshShape = new CANNON.Trimesh(vertArray, indexArray);
+        console.log("Creating physics Trimesh...");
+        console.time("TrimeshCreation");
+        const trimeshVertices = Array.from(vertices);
+        const trimeshIndices = Array.from(indices);
+        const trimeshShape = new CANNON.Trimesh(trimeshVertices, trimeshIndices);
 
         this.terrainBody = new CANNON.Body({
-            mass: 0,  // Static body
-            material: this.groundMaterial,
+            mass: 0,
+            material: this.groundMaterial, // Use the specific ground material
             shape: trimeshShape,
-            collisionFilterGroup: 1,
-            collisionFilterMask: -1
         });
-
-        // Position at origin since vertices are already in world space
         this.terrainBody.position.set(0, 0, 0);
-
-        // Don't allow sleep
-        this.terrainBody.sleepSpeedLimit = -1;
-        this.terrainBody.allowSleep = false;
-
         this.physicsWorld.addBody(this.terrainBody);
-
-        console.log("Terrain created successfully");
-    }
-
-    generateHeightData() {
-        const data = [];
-        const segmentSize = TERRAIN_SIZE / TERRAIN_RESOLUTION;
-
-        // Create heightmap using exact same algorithm for both physics and visual
-        for (let i = 0; i <= TERRAIN_RESOLUTION; i++) {
-            data[i] = [];
-            for (let j = 0; j <= TERRAIN_RESOLUTION; j++) {
-                const worldX = -HALF_SIZE + i * segmentSize;
-                const worldZ = -HALF_SIZE + j * segmentSize;
-                data[i][j] = this.calculateHeight(worldX, worldZ);
-            }
-        }
-
-        return data;
+        console.timeEnd("TrimeshCreation");
+        console.log("Physics Trimesh body created.");
     }
 
     calculateHeight(worldX, worldZ) {
@@ -191,14 +161,12 @@ export class World {
     }
 
     getColorForHeight(height) {
-        let vertColor = new THREE.Color(COLOR_STOPS[0].color);
-        for (let stop = 0; stop < COLOR_STOPS.length - 1; stop++) {
-            const currentStop = COLOR_STOPS[stop];
-            const nextStop = COLOR_STOPS[stop + 1];
+        let vertColor = new THREE.Color().copy(COLOR_STOPS[0].color);
+        for (let i = 0; i < COLOR_STOPS.length - 1; i++) {
+            const currentStop = COLOR_STOPS[i]; const nextStop = COLOR_STOPS[i + 1];
             if (height >= currentStop.h && height < nextStop.h) {
-                const t = (height - currentStop.h) / (nextStop.h - currentStop.h);
-                const clampedT = Math.max(0, Math.min(1, t));
-                vertColor.lerpColors(currentStop.color, nextStop.color, clampedT);
+                const t = Math.max(0, Math.min(1, (height - currentStop.h) / (nextStop.h - currentStop.h)));
+                vertColor.lerpColors(currentStop.color, nextStop.color, t);
                 return vertColor;
             }
         }
@@ -206,5 +174,16 @@ export class World {
             vertColor.copy(COLOR_STOPS[COLOR_STOPS.length - 1].color);
         }
         return vertColor;
+    }
+
+    dispose() {
+        console.log("Disposing world...");
+        if (this.terrainBody) this.physicsWorld.removeBody(this.terrainBody);
+        if (this.terrainMesh) {
+            this.scene.remove(this.terrainMesh);
+            this.terrainMesh.geometry.dispose();
+            // this.terrainMaterial.dispose(); // Only if not shared
+        }
+        this.terrainBody = null; this.terrainMesh = null;
     }
 }

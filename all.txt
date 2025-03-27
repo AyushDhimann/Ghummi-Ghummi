@@ -1,6 +1,6 @@
 
 
---- new\ayush\index.html ---
+--- index.html ---
 
 <!DOCTYPE html>
 <html lang="en">
@@ -18,12 +18,8 @@
             R to reset car position.
         </div>
         <div id="stats-container">
-            <div id="speedometer">
-                Speed: <span id="speed-value">0</span> km/h
-            </div>
-            <div id="distance-meter">
-                Distance: <span id="distance-value">0</span> m
-            </div>
+            <div id="speedometer">Speed: <span id="speed-value">0</span> km/h</div>
+            <div id="distance-meter">Distance: <span id="distance-value">0</span> m</div>
         </div>
     </div>
 
@@ -35,7 +31,7 @@
 </html>
 
 
---- new\ayush\js\InputManager.js ---
+--- js\InputManager.js ---
 
 export class InputManager {
     constructor() {
@@ -75,7 +71,7 @@ export class InputManager {
 }
 
 
---- new\ayush\js\main.js ---
+--- js\main.js ---
 
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
@@ -96,7 +92,7 @@ class Game {
         this.cameraPosition = new THREE.Vector3();
 
         this.speedElement = document.getElementById('speed-value');
-        this.speedElement = document.getElementById('distance-value');
+        this.distanceElement = document.getElementById('distance-value');
 
         this.animate = this.animate.bind(this);
         this.onWindowResize = this.onWindowResize.bind(this);
@@ -116,13 +112,6 @@ class Game {
         this.renderer.setPixelRatio(window.devicePixelRatio);
         this.renderer.shadowMap.enabled = true;
         this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-        this.physicsWorld = new CANNON.World();
-        this.physicsWorld.gravity.set(0, -9.82, 0);
-        this.physicsWorld.broadphase = new CANNON.SAPBroadphase(this.physicsWorld);
-        this.physicsWorld.allowSleep = false; // Disable sleep globally
-        this.physicsWorld.solver.iterations = 20; // Increase iterations
-        this.physicsWorld.defaultContactMaterial.contactEquationStiffness = 1e8;
-        this.physicsWorld.defaultContactMaterial.contactEquationRelaxation = 3;
 
 
         // --- Scene ---
@@ -154,12 +143,15 @@ class Game {
         this.scene.add(directionalLight);
         this.scene.add(directionalLight.target);
 
-        // --- Physics ---
+        // --- Physics World - SINGLE INITIALIZATION ---
         this.physicsWorld = new CANNON.World();
         this.physicsWorld.gravity.set(0, -9.82, 0);
         this.physicsWorld.broadphase = new CANNON.SAPBroadphase(this.physicsWorld);
-        this.physicsWorld.allowSleep = true;
-        this.physicsWorld.solver.iterations = 15;
+        this.physicsWorld.allowSleep = false;
+        this.physicsWorld.solver.iterations = 20;
+        this.physicsWorld.defaultContactMaterial.contactEquationStiffness = 1e8;
+        this.physicsWorld.defaultContactMaterial.contactEquationRelaxation = 3;
+
 
         // --- Physics Debugger ---
         this.physicsDebugger = new CannonDebugger(this.scene, this.physicsWorld, {
@@ -232,8 +224,12 @@ class Game {
             const speed = this.vehicle.getCurrentSpeedKmH();
             this.speedElement.textContent = speed;
         }
-    }
 
+        if (this.vehicle && this.distanceElement) {
+            const distance = this.vehicle.getDistanceTraveled();
+            this.distanceElement.textContent = distance;
+        }
+    }
     animate() {
          const dt = Math.min(this.clock.getDelta(), 0.05);
          requestAnimationFrame(this.animate);
@@ -278,7 +274,7 @@ window.addEventListener('DOMContentLoaded', () => {
 });
 
 
---- new\ayush\js\utils.js ---
+--- js\utils.js ---
 
 // Import THREE directly from CDN
 import * as THREE from 'https://cdnjs.cloudflare.com/ajax/libs/three.js/0.161.0/three.module.min.js';
@@ -297,7 +293,7 @@ export function dampingFactor(decayFactor, dt) {
 
 // Setup background color, fog, and optional skybox
 export function setupBackground(scene, renderer) { // Pass renderer if needed for env map
-    const skyColor = 0xade0ee; // Light blueish sky
+    const skyColor = 0x0a0a32; // Light blueish sky
     scene.background = new THREE.Color(skyColor);
     scene.fog = new THREE.Fog(skyColor, 60, 250); // Adjust fog distances
 
@@ -320,26 +316,26 @@ export function setupBackground(scene, renderer) { // Pass renderer if needed fo
 }
 
 
---- new\ayush\js\Vehicle.js ---
+--- js\Vehicle.js ---
 
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { lerp } from './utils.js'; // Removed dampingFactor import as it's not used here
 
 // --- Constants --- Tuned for Heightfield
-const ENGINE_FORCE_FORWARD = 300;
-const ENGINE_FORCE_BACKWARD = 200;
+const ENGINE_FORCE_FORWARD = 330;
+const ENGINE_FORCE_BACKWARD = 50;
 const BRAKE_FORCE = 60;
 const MAX_STEER_ANGLE = Math.PI / 6.5;
 const STEERING_SPEED = 4.0;
 const SUSPENSION_STIFFNESS = 30;
-const SUSPENSION_DAMPING = 5;
-const SUSPENSION_COMPRESSION = 4;
+const SUSPENSION_DAMPING = 6;
+const SUSPENSION_COMPRESSION = 6;
 const SUSPENSION_REST_LENGTH = 0.5;
-const SUSPENSION_TRAVEL = 0.4;
-const FRICTION_SLIP = 1.8;
+const SUSPENSION_TRAVEL = 0.6;
+const FRICTION_SLIP = 1.9;
 const WHEEL_RADIUS = 0.4;
-const WHEEL_WIDTH = 0.25;
+const WHEEL_WIDTH = 0.3;
 
 export class Vehicle {
     constructor(scene, physicsWorld, inputManager, startPos = new THREE.Vector3(0, 5, 0)) {
@@ -350,9 +346,9 @@ export class Vehicle {
         this.startPosThree = startPos;
 
         // Vehicle dimensions (used for physics mostly)
-        this.chassisWidth = 1.1;
+        this.chassisWidth = 1.7;
         this.chassisHeight = 0.5; // Height of the physics box
-        this.chassisLength = 2.2;
+        this.chassisLength = 2.5;
         this.wheelRadius = WHEEL_RADIUS;
         this.wheelWidth = WHEEL_WIDTH;
 
@@ -436,6 +432,14 @@ export class Vehicle {
         wheelOptions.isFrontWheel = false; this.vehicle.addWheel({ ...wheelOptions });
 
         this.vehicle.addToWorld(this.physicsWorld);
+
+        for (let i = 0; i < this.vehicle.wheelInfos.length; i++) {
+        const wheel = this.vehicle.wheelInfos[i];
+        wheel.frictionSlip = 2.0;  // Increased from 1.9
+        wheel.suspensionStiffness = 35; // Increased from 30
+        wheel.suspensionRestLength = 0.4; // Decreased from 0.5
+    }
+
     }
 
     createVisualVehicle() {
@@ -602,14 +606,14 @@ export class Vehicle {
 }
 
 
---- new\ayush\js\World.js ---
+--- js\World.js ---
 
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { createNoise2D } from 'simplex-noise';
 
 // --- Constants ---
-const TERRAIN_SIZE = 300;
+const TERRAIN_SIZE = 800;
 const TERRAIN_RESOLUTION = 150;
 const HALF_SIZE = TERRAIN_SIZE / 2;
 
@@ -816,25 +820,7 @@ export class World {
 }
 
 
---- new\ayush\README.md ---
-
-```bash
-npx http-server . -o
-```
-
-```bash
-npm install --save-dev cannon-es-debugger
-```
-
-```bash
-npm install --save-dev vite
-```
-```bash
-npm install simplex-noise
-```
-
-
---- new\ayush\style.css ---
+--- style.css ---
 
 body {
     margin: 0;
@@ -869,33 +855,6 @@ body {
     max-width: 200px; /* Limit width */
 }
 
-#speedometer {
-    background-color: rgba(0, 0, 0, 0.6);
-    padding: 8px 12px;
-    border-radius: 5px;
-    font-size: 1.1em;
-    font-weight: bold;
-    margin-right: 10px; /* Add some margin if needed */
-}
-
-#speed-value {
-    min-width: 40px; /* Reserve space for speed value */
-    display: inline-block;
-    text-align: right;
-}
-
-#distance-meter {
-    position: absolute;
-    bottom: 50px;
-    left: 20px;
-    color: white;
-    font-family: 'Arial', sans-serif;
-    font-size: 18px;
-    text-shadow: 2px 2px 2px rgba(0, 0, 0, 0.5);
-}
-
-
-/* Add this to your style.css */
 #stats-container {
     display: flex;
     flex-direction: column;
@@ -903,24 +862,18 @@ body {
     background-color: rgba(0, 0, 0, 0.6);
     padding: 8px 12px;
     border-radius: 5px;
+    font-weight: bold;
+    min-width: 80px;
+    text-align: center;
 }
 
-#speedometer {
-    background-color: transparent;
-    padding: 0;
-    margin: 0;
+#speedometer, #distance-meter {
     font-size: 1.1em;
     font-weight: bold;
 }
 
-#distance-meter {
-    position: static;
-    font-size: 1em;
-    text-shadow: none;
-}
 
-
---- new\ayush\vite.config.js ---
+--- vite.config.js ---
 
 export default {
   server: {
