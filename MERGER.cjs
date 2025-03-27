@@ -14,7 +14,7 @@ const directories = ['./'];
 const outputFilePath = 'all.txt';
 
 // List of blacklisted files and directories
-const blacklist = ['node_modules', 'dist', 'build', 'public', 'all.txt', 'MERGER.js',
+const blacklist = ['node_modules', 'dist', 'build', 'public', 'all.txt', 'MERGER.cjs',
                   'package-lock.json', 'package.json', '.git', '.gitignore',
                   'README.md', '.run', '.idea', 'LICENSE'];
 

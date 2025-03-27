@@ -7,7 +7,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Infinite Drive Clone</title>
+    <title>Infinite Drive Clone - Improved</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -15,11 +15,12 @@
     <div id="ui-container">
         <div id="info">
             Use W/S/A/D or Arrow Keys to drive.<br>
-            R to reset car position.
+            R to reset car position.<br>
+            (Auto-resets if flipped)
         </div>
         <div id="stats-container">
             <div id="speedometer">Speed: <span id="speed-value">0</span> km/h</div>
-            <div id="distance-meter">Distance: <span id="distance-value">0</span> m</div>
+            <div id="distance-meter">Distance: <span id="distance-value">0</span></div>
         </div>
     </div>
 
@@ -32,6 +33,8 @@
 
 
 --- js\InputManager.js ---
+
+// js/InputManager.js
 
 export class InputManager {
     constructor() {
@@ -51,30 +54,56 @@ export class InputManager {
             KeyR: 'reset'
         };
 
-        window.addEventListener('keydown', (e) => this.onKeyChange(e, true));
-        window.addEventListener('keyup', (e) => this.onKeyChange(e, false));
+        // Using arrow functions to maintain 'this' context
+        this._handleKeyDown = this._handleKeyDown.bind(this);
+        this._handleKeyUp = this._handleKeyUp.bind(this);
+
+        window.addEventListener('keydown', this._handleKeyDown);
+        window.addEventListener('keyup', this._handleKeyUp);
+
+        console.log("InputManager initialized.");
+    }
+
+    _handleKeyDown(event) {
+        this.onKeyChange(event, true);
+    }
+
+    _handleKeyUp(event) {
+        this.onKeyChange(event, false);
     }
 
     onKeyChange(event, isPressed) {
         const keyAction = this.keyMap[event.code];
-        // *** ADD LOG ***
-        console.log(`InputManager: Key=${event.code}, Action=${keyAction}, Pressed=${isPressed}`);
+        // console.log(`InputManager: Key=${event.code}, Action=${keyAction}, Pressed=${isPressed}`); // Keep for debugging if needed
         if (keyAction) {
             this.keys[keyAction] = isPressed;
-            event.preventDefault(); // Prevent default browser actions (scrolling)
+            // Prevent default browser actions (like scrolling with arrow keys)
+            // Only prevent if the key is mapped to an action
+            event.preventDefault();
         }
     }
 
     isPressed(action) {
         return this.keys[action] || false;
     }
+
+    // Optional: Add a dispose method to clean up listeners if the game were to be destroyed
+    dispose() {
+        window.removeEventListener('keydown', this._handleKeyDown);
+        window.removeEventListener('keyup', this._handleKeyUp);
+        this.keys = {}; // Clear keys
+        console.log("InputManager disposed.");
+    }
 }
 
 
 --- js\main.js ---
 
+// js/main.js
+
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
+// Note: Not using GSSolver here, relying on default + iterations + compound shape
 import CannonDebugger from 'cannon-es-debugger';
 
 import { Vehicle } from './Vehicle.js';
@@ -82,97 +111,88 @@ import { World } from './World.js';
 import { InputManager } from './InputManager.js';
 import { setupBackground, dampingFactor } from './utils.js';
 
+// --- Performance / Debug Flags ---
+const USE_PHYSICS_DEBUGGER = true; // Set to true to see physics wireframes
+
+// --- Physics Settings ---
+const PHYSICS_FIXED_TIMESTEP = 1 / 60;
+const PHYSICS_MAX_SUBSTEPS = 8;
+const SOLVER_ITERATIONS = 25; // Keep iterations high for stability
+
 class Game {
     constructor() {
         this.renderer = null; this.scene = null; this.camera = null;
         this.physicsWorld = null; this.clock = null; this.inputManager = null;
-        this.vehicle = null; this.world = null; this.physicsDebugger = null;
-
+        this.vehicle = null; this.world = null;
+        this.physicsDebugger = null;
         this.cameraTarget = new THREE.Vector3();
         this.cameraPosition = new THREE.Vector3();
-
         this.speedElement = document.getElementById('speed-value');
         this.distanceElement = document.getElementById('distance-value');
-
         this.animate = this.animate.bind(this);
         this.onWindowResize = this.onWindowResize.bind(this);
-
         this.init();
     }
 
     init() {
+        console.log("Initializing Game...");
         this.clock = new THREE.Clock();
         this.inputManager = new InputManager();
 
-        // --- Renderer ---
         const canvas = document.querySelector('#c');
-        if (!canvas) { console.error("Canvas element #c not found!"); return; }
-        this.renderer = new THREE.WebGLRenderer({ antialias: true, canvas });
+        if (!canvas) { this.showError("Canvas element #c not found!"); return; }
+        this.renderer = new THREE.WebGLRenderer({
+            antialias: true, canvas: canvas, powerPreference: "high-performance"
+        });
         this.renderer.setSize(window.innerWidth, window.innerHeight);
-        this.renderer.setPixelRatio(window.devicePixelRatio);
+        this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         this.renderer.shadowMap.enabled = true;
         this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
-
-        // --- Scene ---
         this.scene = new THREE.Scene();
         setupBackground(this.scene, this.renderer);
 
-        // --- Camera ---
-        this.camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 1000);
-        // Initial camera position might need slight adjustment based on new offset
-        this.camera.position.set(0, 6, -10); // Slightly adjusted initial
+        this.camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.2, 1000);
+        this.camera.position.set(0, 8, -12); // Initial camera position
         this.camera.lookAt(0, 0, 0);
         this.cameraPosition.copy(this.camera.position);
 
-        // --- Lighting ---
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
-        this.scene.add(ambientLight);
-        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.9);
-        directionalLight.position.set(50, 60, 30);
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
+        directionalLight.position.set(40, 50, 20);
         directionalLight.castShadow = true;
         directionalLight.shadow.mapSize.width = 2048;
         directionalLight.shadow.mapSize.height = 2048;
-        directionalLight.shadow.camera.near = 1;
-        directionalLight.shadow.camera.far = 200;
-        directionalLight.shadow.camera.left = -80;
-        directionalLight.shadow.camera.right = 80;
-        directionalLight.shadow.camera.top = 80;
-        directionalLight.shadow.camera.bottom = -80;
-        directionalLight.target.position.set(0, 0, 0);
+        const shadowCamSize = 60;
+        directionalLight.shadow.camera.near = 1; directionalLight.shadow.camera.far = 150;
+        directionalLight.shadow.camera.left = -shadowCamSize; directionalLight.shadow.camera.right = shadowCamSize;
+        directionalLight.shadow.camera.top = shadowCamSize; directionalLight.shadow.camera.bottom = -shadowCamSize;
+        directionalLight.shadow.bias = -0.001;
         this.scene.add(directionalLight);
         this.scene.add(directionalLight.target);
 
-        // --- Physics World - SINGLE INITIALIZATION ---
-        this.physicsWorld = new CANNON.World();
-        this.physicsWorld.gravity.set(0, -9.82, 0);
-        this.physicsWorld.broadphase = new CANNON.SAPBroadphase(this.physicsWorld);
-        this.physicsWorld.allowSleep = false;
-        this.physicsWorld.solver.iterations = 20;
-        this.physicsWorld.defaultContactMaterial.contactEquationStiffness = 1e8;
-        this.physicsWorld.defaultContactMaterial.contactEquationRelaxation = 3;
-
-
-        // --- Physics Debugger ---
-        this.physicsDebugger = new CannonDebugger(this.scene, this.physicsWorld, {
-            color: 0xff00ff, // Magenta wireframes
-            scale: 1.0,
+        this.physicsWorld = new CANNON.World({
+            gravity: new CANNON.Vec3(0, -9.82, 0),
+            broadphase: new CANNON.SAPBroadphase(this.physicsWorld),
+            allowSleep: true,
         });
+        this.physicsWorld.solver.iterations = SOLVER_ITERATIONS;
+        this.physicsWorld.defaultContactMaterial.contactEquationStiffness = 1e8; // Base stiffness
+        this.physicsWorld.defaultContactMaterial.contactEquationRelaxation = 3;
+        this.physicsWorld.defaultContactMaterial.friction = 0.3;
+        this.physicsWorld.defaultContactMaterial.restitution = 0.1;
 
-        // --- World (Terrain using Heightfield) ---
-        this.world = new World(this.scene, this.physicsWorld);
+        if (USE_PHYSICS_DEBUGGER) {
+            this.physicsDebugger = new CannonDebugger(this.scene, this.physicsWorld, { color: 0x00ff00, scale: 1.0 });
+            console.log("CannonDebugger initialized.");
+        }
 
-        // --- Vehicle ---
-        const startPosition = new THREE.Vector3(0, 5, 0); // Start high enough
-        this.vehicle = new Vehicle(this.scene, this.physicsWorld, this.inputManager, startPosition);
+        try { this.world = new World(this.scene, this.physicsWorld); }
+        catch (error) { this.showError(`Failed to initialize World:\n${error.stack}`); return; }
 
-         // --- Initial World Update ---
-         if (this.vehicle && this.vehicle.chassisBody) {
-             this.world.update(this.vehicle.getPosition());
-         } else {
-              console.error("Vehicle not ready for initial world update.");
-              this.world.update(new THREE.Vector3(0, 0, 0));
-         }
+        try {
+            const startPosition = new THREE.Vector3(0, 5, 0);
+            this.vehicle = new Vehicle(this.scene, this.physicsWorld, this.inputManager, startPosition);
+        } catch (error) { this.showError(`Failed to initialize Vehicle:\n${error.stack}`); return; }
 
         window.addEventListener('resize', this.onWindowResize);
         console.log("Initialization complete. Starting animation loop.");
@@ -187,23 +207,30 @@ class Game {
     }
 
     updateCamera(dt) {
-        // *** CAR VISUAL CHANGE: Check for chassisGroup ***
-         if (!this.vehicle || !this.vehicle.chassisGroup || !this.vehicle.chassisBody) return;
+        if (!this.vehicle || !this.vehicle.chassisGroup || !this.vehicle.chassisBody) return;
 
-        // *** CAR VISUAL CHANGE: Use chassisGroup for matrix world ***
         const carChassisGroup = this.vehicle.chassisGroup;
+        const carPosition = this.vehicle.getPosition(); // Use getter for consistency
 
-        // *** CAMERA ADJUSTMENT: Lower Y, Closer X ***
-        const relativeCameraOffset = new THREE.Vector3( -7, 4, 0); // Was (-8, 5, 0) - Closer and Lower
-        const cameraOffset = relativeCameraOffset.clone().applyMatrix4(carChassisGroup.matrixWorld);
+        // Camera offset relative to car's local space (X: Forward/Backward, Y: Up/Down, Z: Left/Right)
+        const relativeCameraOffset = new THREE.Vector3(-10, 5, 0); // Behind, Up, Centered
 
-        // Adjust lookAt target if needed (looking slightly higher/further relative to car)
-        const lookAtTargetOffset = new THREE.Vector3(4, 1.5, 0); // Look slightly higher
-        const worldLookAtTarget = lookAtTargetOffset.clone().applyMatrix4(carChassisGroup.matrixWorld);
+        // Look-at target relative to car's local space
+        const lookAtTargetOffset = new THREE.Vector3(5, 1.5, 0); // Ahead, Slightly Up, Centered
 
-        // Damping factors for smooth camera movement
-        const posLerpFactor = dampingFactor(0.02, dt);
-        const targetLerpFactor = dampingFactor(0.01, dt);
+        // Calculate world positions
+        const cameraOffset = relativeCameraOffset.clone().applyQuaternion(carChassisGroup.quaternion).add(carPosition);
+        const worldLookAtTarget = lookAtTargetOffset.clone().applyQuaternion(carChassisGroup.quaternion).add(carPosition);
+
+        // Smooth interpolation
+        const posLerpFactor = dampingFactor(0.03, dt);
+        const targetLerpFactor = dampingFactor(0.05, dt);
+
+        // Prevent camera going too low relative to car
+        const minCameraHeightAboveCar = 1.5;
+        if (cameraOffset.y < carPosition.y + minCameraHeightAboveCar) {
+             cameraOffset.y = carPosition.y + minCameraHeightAboveCar;
+        }
 
         this.cameraPosition.lerp(cameraOffset, posLerpFactor);
         this.cameraTarget.lerp(worldLookAtTarget, targetLerpFactor);
@@ -220,87 +247,142 @@ class Game {
     }
 
     updateUI() {
-        if (this.vehicle && this.speedElement) {
-            const speed = this.vehicle.getCurrentSpeedKmH();
-            this.speedElement.textContent = speed;
-        }
-
-        if (this.vehicle && this.distanceElement) {
-            const distance = this.vehicle.getDistanceTraveled();
-            this.distanceElement.textContent = distance;
+        if (this.vehicle) {
+            if (this.speedElement) this.speedElement.textContent = this.vehicle.getCurrentSpeedKmH();
+            if (this.distanceElement) {
+                const distMeters = this.vehicle.getDistanceTraveled('meters');
+                this.distanceElement.textContent = (distMeters < 1000) ? `${distMeters} m` : `${this.vehicle.getDistanceTraveled('km')} km`;
+            }
         }
     }
+
     animate() {
-         const dt = Math.min(this.clock.getDelta(), 0.05);
-         requestAnimationFrame(this.animate);
+        requestAnimationFrame(this.animate);
+        const dt = Math.min(this.clock.getDelta(), 0.1);
 
-        // --- Physics Update ---
         if (this.physicsWorld) {
-            const fixedTimeStep = 1 / 60;
-            const maxSubSteps = 10;  // Increased from 5
-            try {
-                this.physicsWorld.step(fixedTimeStep, dt, maxSubSteps);
-            } catch (error) { console.error("Physics step failed:", error); }
+            try { this.physicsWorld.step(PHYSICS_FIXED_TIMESTEP, dt, PHYSICS_MAX_SUBSTEPS); }
+            catch (error) { console.error("Physics step failed:", error); }
         }
 
-        // --- Game Object Updates ---
-        if (this.vehicle) { this.vehicle.update(dt); }
-        if (this.world && this.vehicle) { this.world.update(this.vehicle.getPosition()); }
+        if (this.vehicle) this.vehicle.update(dt);
+        // if (this.world) this.world.update(this.vehicle.getPosition()); // If world needed updates
 
-        // --- Camera Update ---
         this.updateCamera(dt);
-
-        // --- UI Update ---
         this.updateUI();
+        if (this.physicsDebugger) this.physicsDebugger.update();
 
-        // --- UPDATE PHYSICS DEBUGGER ---
-        if (this.physicsDebugger) { this.physicsDebugger.update(); }
+        if (this.renderer) this.renderer.render(this.scene, this.camera);
+    }
 
-        // --- Render ---
-        if (this.renderer && this.scene && this.camera) {
-             this.renderer.render(this.scene, this.camera);
+    showError(message) {
+        console.error("GAME ERROR:", message); // Log full error too
+        const errorDivId = 'game-error-message';
+        let errorDiv = document.getElementById(errorDivId);
+        if (!errorDiv) {
+            errorDiv = document.createElement('div');
+            errorDiv.id = errorDivId;
+            errorDiv.style.position = 'absolute'; errorDiv.style.top = '0'; errorDiv.style.left = '0';
+            errorDiv.style.width = '100%'; errorDiv.style.padding = '20px';
+            errorDiv.style.backgroundColor = 'rgba(255, 0, 0, 0.8)'; errorDiv.style.color = 'white';
+            errorDiv.style.fontFamily = 'monospace'; errorDiv.style.whiteSpace = 'pre-wrap';
+            errorDiv.style.zIndex = '1000'; errorDiv.style.boxSizing = 'border-box';
+            document.body.appendChild(errorDiv);
         }
+        errorDiv.textContent = `ERROR:\n${message}\n\nPlease check the console (F12) for more details.`;
+        // Optionally hide canvas/UI
+        // document.getElementById('c')?.style.display = 'none';
+        // document.getElementById('ui-container')?.style.display = 'none';
+    }
+
+    dispose() {
+        console.log("Disposing game...");
+        // Cancel animation frame if ID stored
+        window.removeEventListener('resize', this.onWindowResize);
+        if (this.inputManager) this.inputManager.dispose();
+        if (this.vehicle) this.vehicle.dispose();
+        if (this.world) this.world.dispose();
+        if (this.renderer) this.renderer.dispose();
+        // Nullify references
+        Object.keys(this).forEach(key => this[key] = null);
     }
 }
 
-// Start the game
+// --- Global Error Handling ---
+window.addEventListener('error', (event) => {
+    console.error("Unhandled global error:", event.error);
+    window.gameInstance?.showError(`Unhandled Error: ${event.message}\n${event.error?.stack}`);
+});
+window.addEventListener('unhandledrejection', (event) => {
+    console.error("Unhandled promise rejection:", event.reason);
+    window.gameInstance?.showError(`Unhandled Promise Rejection: ${event.reason?.message}\n${event.reason?.stack}`);
+});
+
+// --- Start the Game ---
 window.addEventListener('DOMContentLoaded', () => {
-     console.log("DOM Loaded. Initializing Game...");
-     try { new Game(); }
-     catch(error) {
-         console.error("Failed to initialize game:", error);
-         document.body.innerHTML = `<div style="color: red; padding: 20px; font-family: monospace; white-space: pre-wrap;">Error initializing game. Check console (F12) for details. <br><br>${error.stack}</div>`;
-     }
+    console.log("DOM Loaded. Initializing Game...");
+    try { window.gameInstance = new Game(); }
+    catch (error) {
+        console.error("Fatal error during game initialization:", error);
+        document.body.innerHTML = `<div style="color: red; background: black; padding: 20px; font-family: monospace; white-space: pre-wrap; position: absolute; top:0; left:0; width: 100%; z-index: 1000; box-sizing: border-box;">FATAL ERROR initializing game. Check console (F12) for details. <br><br>${error.stack}</div>`;
+    }
 });
 
 
 --- js\utils.js ---
 
-// Import THREE directly from CDN
-import * as THREE from 'https://cdnjs.cloudflare.com/ajax/libs/three.js/0.161.0/three.module.min.js';
+// js/utils.js
 
-// Linear interpolation
+// Import THREE locally, assuming it's installed via npm/yarn
+import * as THREE from 'three';
+
+/**
+ * Linear interpolation between two values.
+ * @param {number} start Start value.
+ * @param {number} end End value.
+ * @param {number} t Interpolation factor (0.0 to 1.0).
+ * @returns {number} Interpolated value.
+ */
 export function lerp(start, end, t) {
     return start * (1 - t) + end * t;
 }
 
-// Frame-rate independent damping (useful for lerp factor)
-// decayFactor: How much remains after 1 second (e.g., 0.01 means 1% remains)
-// dt: delta time in seconds
+/**
+ * Calculates a frame-rate independent damping factor for lerp.
+ * @param {number} decayFactor How much percentage remains after 1 second (e.g., 0.01 for 1%).
+ * @param {number} dt Delta time in seconds.
+ * @returns {number} The lerp factor to use for this frame.
+ */
 export function dampingFactor(decayFactor, dt) {
-    return 1.0 - Math.pow(decayFactor, dt);
+    // Ensure decayFactor is within a reasonable range to avoid Math.pow issues
+    const clampedDecay = Math.max(1e-9, Math.min(1.0, decayFactor));
+    // Calculate the lerp amount needed this frame to achieve the desired decay over 1 second
+    return 1.0 - Math.pow(clampedDecay, dt);
 }
 
-// Setup background color, fog, and optional skybox
-export function setupBackground(scene, renderer) { // Pass renderer if needed for env map
-    const skyColor = 0x0a0a32; // Light blueish sky
-    scene.background = new THREE.Color(skyColor);
-    scene.fog = new THREE.Fog(skyColor, 60, 250); // Adjust fog distances
+/**
+ * Sets up the scene's background color and fog.
+ * @param {THREE.Scene} scene The Three.js scene object.
+ * @param {THREE.WebGLRenderer} renderer The Three.js renderer (optional, needed for env map).
+ */
+export function setupBackground(scene, renderer) {
+    const skyColor = 0x0a0a32; // A lighter sky blue
+    const groundColor = 0xB8860B; // DarkGoldenrod like color for fog blend
 
-    // --- Optional Skybox ---
+    scene.background = new THREE.Color(skyColor);
+    // Fog( color, near, far ) - Adjust near/far for desired effect
+    scene.fog = new THREE.Fog(skyColor, 50, 300);
+
+    // --- Optional: Add Hemisphere Light for softer ambient lighting ---
+    const hemiLight = new THREE.HemisphereLight(skyColor, groundColor, 0.6); // Sky, Ground, Intensity
+    hemiLight.position.set(0, 50, 0);
+    scene.add(hemiLight);
+
+
+    // --- Optional Skybox (keep commented unless you have the assets) ---
     /*
     const loader = new THREE.CubeTextureLoader();
-    // Make sure you have these images in a 'skybox' folder relative to your public directory
+    // Make sure you have these images in a 'public/skybox/' folder (or adjust path)
     const texture = loader.setPath('skybox/').load([
         'px.jpg', // Right
         'nx.jpg', // Left
@@ -310,7 +392,7 @@ export function setupBackground(scene, renderer) { // Pass renderer if needed fo
         'nz.jpg'  // Back
     ]);
     scene.background = texture;
-    // Optional: Apply as environment map for reflections (requires materials to be adjusted)
+    // Apply as environment map for reflections (requires materials supporting env maps)
     // scene.environment = texture;
     */
 }
@@ -318,24 +400,39 @@ export function setupBackground(scene, renderer) { // Pass renderer if needed fo
 
 --- js\Vehicle.js ---
 
+// js/Vehicle.js
+
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
-import { lerp } from './utils.js'; // Removed dampingFactor import as it's not used here
+import { lerp, dampingFactor } from './utils.js';
 
-// --- Constants --- Tuned for Heightfield
-const ENGINE_FORCE_FORWARD = 330;
-const ENGINE_FORCE_BACKWARD = 50;
-const BRAKE_FORCE = 60;
-const MAX_STEER_ANGLE = Math.PI / 6.5;
-const STEERING_SPEED = 4.0;
-const SUSPENSION_STIFFNESS = 30;
-const SUSPENSION_DAMPING = 6;
-const SUSPENSION_COMPRESSION = 6;
-const SUSPENSION_REST_LENGTH = 0.5;
-const SUSPENSION_TRAVEL = 0.6;
-const FRICTION_SLIP = 1.9;
+// --- Vehicle Physics Constants ---
+// Engine & Brakes
+const ENGINE_FORCE_FORWARD = 500;
+const ENGINE_FORCE_BACKWARD = 200;
+const BRAKE_FORCE = 10;
+
+// Steering
+const MAX_STEER_ANGLE = Math.PI / 6.0;
+
+// Suspension & Wheels
+const SUSPENSION_STIFFNESS = 35;
+const SUSPENSION_DAMPING = 5;
+const SUSPENSION_COMPRESSION = 5;
+const SUSPENSION_REST_LENGTH = 0.45;
+const SUSPENSION_TRAVEL = 0.5;
+const FRICTION_SLIP = 2.2;
 const WHEEL_RADIUS = 0.4;
 const WHEEL_WIDTH = 0.3;
+
+// Chassis Physics Body Properties
+const CHASSIS_MASS = 160;
+const CHASSIS_LINEAR_DAMPING = 0.25;
+const CHASSIS_ANGULAR_DAMPING = 0.7;
+
+// --- Flip Detection Constants ---
+const FLIP_THRESHOLD_DOT = 0.3; // Dot product threshold (car_up . world_up)
+const FLIP_RESET_DELAY = 2.5; // Seconds the car must be flipped before auto-reset
 
 export class Vehicle {
     constructor(scene, physicsWorld, inputManager, startPos = new THREE.Vector3(0, 5, 0)) {
@@ -343,60 +440,80 @@ export class Vehicle {
         this.physicsWorld = physicsWorld;
         this.inputManager = inputManager;
         this.startPosCannon = new CANNON.Vec3(startPos.x, startPos.y, startPos.z);
-        this.startPosThree = startPos;
+        this.startPosThree = startPos.clone();
 
-        // Vehicle dimensions (used for physics mostly)
+        // Vehicle dimensions
         this.chassisWidth = 1.7;
-        this.chassisHeight = 0.5; // Height of the physics box
-        this.chassisLength = 2.5;
+        this.chassisHeight = 0.5; // Main physics box height
+        this.chassisLength = 2.8;
         this.wheelRadius = WHEEL_RADIUS;
         this.wheelWidth = WHEEL_WIDTH;
 
+        // Physics objects
         this.vehicle = null;
-        this.chassisBody = null;
-        // *** CAR VISUAL CHANGE: Use a Group instead of a single Mesh ***
+        this.chassisBody = null; // This will be the Compound body
+
+        // Visual objects
         this.chassisGroup = null;
         this.wheelMeshes = [];
-        // this.wheelBodies = []; // Keep commented out unless needed later
 
-        // Steering state
-        this.currentSteering = 0; // Actual current steering value applied
-
-        // Distance tracking
+        // State
+        this.currentSteering = 0;
         this.totalDistance = 0;
-        this.previousPosition = null;
+        this.previousPosition = this.startPosThree.clone();
 
-        this.createPhysicsVehicle();
-        this.createVisualVehicle(); // Will now create the group
+        // Flip state
+        this.isFlipped = false;
+        this.timeFlipped = 0;
+
+        this.createPhysicsVehicle(); // Creates compound body now
+        this.createVisualVehicle();
+
+        console.log("Vehicle initialized.");
     }
 
     createPhysicsVehicle() {
-        // Physics shape remains a simple box but with better collision detection
-        const chassisShape = new CANNON.Box(new CANNON.Vec3(this.chassisLength * 0.5, this.chassisHeight * 0.5, this.chassisWidth * 0.5));
+        // --- Create Shapes for Compound Body ---
+        // 1. Main Chassis Box (visual representation)
+        const mainBoxExtents = new CANNON.Vec3(this.chassisLength * 0.5, this.chassisHeight * 0.5, this.chassisWidth * 0.5);
+        const mainBoxShape = new CANNON.Box(mainBoxExtents);
+        const mainBoxOffset = new CANNON.Vec3(0, 0, 0); // Centered
+
+        // 2. Skid Plate Box (for better ground contact stability)
+        const skidHeight = 0.05; // Very thin
+        const skidWidth = this.chassisWidth * 0.95; // Almost full width
+        const skidLength = this.chassisLength * 0.9; // Almost full length
+        const skidPlateExtents = new CANNON.Vec3(skidLength * 0.5, skidHeight * 0.5, skidWidth * 0.5);
+        const skidPlateShape = new CANNON.Box(skidPlateExtents);
+        // Position it slightly below the main chassis box center
+        const skidPlateOffsetY = -mainBoxExtents.y - skidHeight * 0.5 + 0.01; // Place just below the main box bottom
+        const skidPlateOffset = new CANNON.Vec3(0, skidPlateOffsetY, 0);
+
+        // --- Create Compound Body ---
         this.chassisBody = new CANNON.Body({
-            mass: 150,  // Reduced from 180
-            material: this.physicsWorld.defaultMaterial,
-            collisionFilterGroup: 2,
-            collisionFilterMask: 1
+            mass: CHASSIS_MASS,
+            material: this.physicsWorld.defaultMaterial, // Assign material here
+            position: this.startPosCannon,
+            angularVelocity: new CANNON.Vec3(0, 0, 0),
+            linearDamping: CHASSIS_LINEAR_DAMPING,
+            angularDamping: CHASSIS_ANGULAR_DAMPING,
         });
 
-        this.chassisBody.addShape(chassisShape);
-        this.chassisBody.position.copy(this.startPosCannon);
-        this.chassisBody.angularVelocity.set(0, 0, 0);
-        this.chassisBody.angularDamping = 0.7;
-        this.chassisBody.linearDamping = 0.2;
+        // --- Add Shapes to the Compound Body ---
+        this.chassisBody.addShape(mainBoxShape, mainBoxOffset);
+        this.chassisBody.addShape(skidPlateShape, skidPlateOffset);
 
-        // Add this to prevent the physics engine from putting the car to sleep
-        this.chassisBody.allowSleep = false;
+        this.chassisBody.allowSleep = false; // Keep vehicle active
 
-        // Critical for terrain collision
-        this.chassisBody.sleepSpeedLimit = -1;
-
+        // --- Raycast Vehicle Setup (uses the compound body) ---
         this.vehicle = new CANNON.RaycastVehicle({
             chassisBody: this.chassisBody,
-            indexRightAxis: 2, indexForwardAxis: 0, indexUpAxis: 1,
+            indexRightAxis: 2,    // Z is right
+            indexForwardAxis: 0,  // X is forward
+            indexUpAxis: 1,       // Y is up
         });
 
+        // --- Wheel Setup ---
         const wheelOptions = {
             radius: this.wheelRadius,
             directionLocal: new CANNON.Vec3(0, -1, 0),
@@ -407,180 +524,236 @@ export class Vehicle {
             dampingCompression: SUSPENSION_COMPRESSION,
             maxSuspensionForce: 100000,
             maxSuspensionTravel: SUSPENSION_TRAVEL,
-            customSlidingRotationalSpeed: -30,
-            axleLocal: new CANNON.Vec3(0, 0, 1),
-            chassisConnectionPointLocal: new CANNON.Vec3(),
+            customSlidingRotationalSpeed: -35,
             useCustomSlidingRotationalSpeed: true,
+            axleLocal: new CANNON.Vec3(0, 0, 1), // Z-axis for axle rotation
+            chassisConnectionPointLocal: new CANNON.Vec3(), // Set per wheel
             isFrontWheel: false,
         };
 
-        const axleWidth = this.chassisWidth * 0.5;
-        // Adjust connection height based on the visual model if needed, but physics box height is key
-        const connectionHeight = -this.chassisHeight * 0.4;
+        // Wheel positions (relative to the compound body's center 0,0,0)
+        const axleWidth = this.chassisWidth * 0.45;
+        const frontAxlePos = this.chassisLength * 0.4;
+        const rearAxlePos = -this.chassisLength * 0.4;
+        // Connect wheels relative to the main box's approximate bottom edge height
+        const connectionHeight = -this.chassisHeight * 0.4; // Relative to body center (0,0,0)
 
-        // Front Left (0)
-        wheelOptions.chassisConnectionPointLocal.set(this.chassisLength * 0.4, connectionHeight, axleWidth);
+        // Front Left (Index 0)
+        wheelOptions.chassisConnectionPointLocal.set(frontAxlePos, connectionHeight, axleWidth);
         wheelOptions.isFrontWheel = true; this.vehicle.addWheel({ ...wheelOptions });
-        // Front Right (1)
-        wheelOptions.chassisConnectionPointLocal.set(this.chassisLength * 0.4, connectionHeight, -axleWidth);
+        // Front Right (Index 1)
+        wheelOptions.chassisConnectionPointLocal.set(frontAxlePos, connectionHeight, -axleWidth);
         wheelOptions.isFrontWheel = true; this.vehicle.addWheel({ ...wheelOptions });
-        // Rear Left (2)
-        wheelOptions.chassisConnectionPointLocal.set(-this.chassisLength * 0.4, connectionHeight, axleWidth);
+        // Rear Left (Index 2)
+        wheelOptions.chassisConnectionPointLocal.set(rearAxlePos, connectionHeight, axleWidth);
         wheelOptions.isFrontWheel = false; this.vehicle.addWheel({ ...wheelOptions });
-        // Rear Right (3)
-        wheelOptions.chassisConnectionPointLocal.set(-this.chassisLength * 0.4, connectionHeight, -axleWidth);
+        // Rear Right (Index 3)
+        wheelOptions.chassisConnectionPointLocal.set(rearAxlePos, connectionHeight, -axleWidth);
         wheelOptions.isFrontWheel = false; this.vehicle.addWheel({ ...wheelOptions });
 
+        // Add RaycastVehicle specific constraints/logic to the physics world
         this.vehicle.addToWorld(this.physicsWorld);
 
-        for (let i = 0; i < this.vehicle.wheelInfos.length; i++) {
-        const wheel = this.vehicle.wheelInfos[i];
-        wheel.frictionSlip = 2.0;  // Increased from 1.9
-        wheel.suspensionStiffness = 35; // Increased from 30
-        wheel.suspensionRestLength = 0.4; // Decreased from 0.5
-    }
-
+        console.log("Physics vehicle created with Compound shape.");
     }
 
     createVisualVehicle() {
-        // *** CAR VISUAL CHANGE: Create a Group and add parts ***
+        // Visuals remain the same, based on the main chassis dimensions
         this.chassisGroup = new THREE.Group();
         this.scene.add(this.chassisGroup);
 
-        // Main Body (adjust dimensions and position as needed)
-        const bodyHeight = 0.4; // Visual height, can differ from physics box
+        const bodyHeight = 0.4;
+        const bodyOffsetY = 0.1;
         const bodyGeo = new THREE.BoxGeometry(this.chassisLength, bodyHeight, this.chassisWidth);
-        const bodyMat = new THREE.MeshStandardMaterial({ color: 0xcc0000, metalness: 0.6, roughness: 0.4 });
+        const bodyMat = new THREE.MeshStandardMaterial({
+            color: 0xcc0000, metalness: 0.7, roughness: 0.3, flatShading: false
+        });
         const bodyMesh = new THREE.Mesh(bodyGeo, bodyMat);
         bodyMesh.castShadow = true;
-        bodyMesh.position.y = bodyHeight / 2; // Position base slightly above origin (0,0,0) of the group
+        bodyMesh.receiveShadow = false;
+        bodyMesh.position.y = bodyOffsetY;
         this.chassisGroup.add(bodyMesh);
 
-        // Cabin (smaller box on top)
-        const cabinLength = this.chassisLength * 0.5;
-        const cabinWidth = this.chassisWidth * 0.85;
+        const cabinLength = this.chassisLength * 0.45;
+        const cabinWidth = this.chassisWidth * 0.8;
         const cabinHeight = 0.5;
         const cabinGeo = new THREE.BoxGeometry(cabinLength, cabinHeight, cabinWidth);
-        const cabinMat = new THREE.MeshStandardMaterial({ color: 0x333333, metalness: 0.2, roughness: 0.7 });
+        const cabinMat = new THREE.MeshStandardMaterial({
+            color: 0x444444, metalness: 0.1, roughness: 0.7, flatShading: false
+        });
         const cabinMesh = new THREE.Mesh(cabinGeo, cabinMat);
         cabinMesh.castShadow = true;
-        // Position cabin on top of the body, slightly forward
-        cabinMesh.position.y = bodyHeight + cabinHeight / 2;
-        cabinMesh.position.x = -this.chassisLength * 0.1; // Adjust X offset for placement
+        cabinMesh.receiveShadow = true;
+        cabinMesh.position.y = bodyOffsetY + bodyHeight / 2 + cabinHeight / 2;
+        cabinMesh.position.x = -this.chassisLength * 0.15;
         this.chassisGroup.add(cabinMesh);
 
-        // Wheel Meshes (No change needed here)
         const wheelGeo = new THREE.CylinderGeometry(this.wheelRadius, this.wheelRadius, this.wheelWidth, 24);
-        wheelGeo.rotateX(Math.PI / 2); // Rotate geometry for correct orientation
-        const wheelMat = new THREE.MeshStandardMaterial({ color: 0x333333, metalness: 0.1, roughness: 0.8 });
+        wheelGeo.rotateX(Math.PI / 2);
+        const wheelMat = new THREE.MeshStandardMaterial({
+            color: 0x222222, metalness: 0.1, roughness: 0.8, flatShading: false
+        });
+
         for (let i = 0; i < 4; i++) {
             const wheelMesh = new THREE.Mesh(wheelGeo, wheelMat);
             wheelMesh.castShadow = true;
-            // Add wheels directly to the scene for independent updating
-            // Alternatively, could add to chassisGroup if offset correctly, but direct scene add is easier with RaycastVehicle updates
+            wheelMesh.receiveShadow = true;
             this.scene.add(wheelMesh);
             this.wheelMeshes.push(wheelMesh);
         }
     }
 
     update(dt) {
-        if (!this.vehicle || !this.chassisBody || !this.chassisGroup) return; // Check for group
+        if (!this.vehicle || !this.chassisBody || !this.chassisGroup) return;
+
+        // --- Check for Flip Condition & Auto-Reset ---
+        this.checkFlipCondition(dt);
+        // If reset was triggered by flip check, this.isFlipped will be false after resetPosition runs
+        // No explicit return needed here as resetPosition handles state
 
         // --- Track Distance ---
         const currentPosition = this.getPosition();
-        if (this.previousPosition) {
-            // Only count horizontal distance (x-z plane)
-            const horizontalDist = Math.sqrt(
-                Math.pow(currentPosition.x - this.previousPosition.x, 2) +
-                Math.pow(currentPosition.z - this.previousPosition.z, 2)
-            );
-            this.totalDistance += horizontalDist;
-        }
-        this.previousPosition = currentPosition.clone();
+        const dx = currentPosition.x - this.previousPosition.x;
+        const dz = currentPosition.z - this.previousPosition.z;
+        this.totalDistance += Math.sqrt(dx * dx + dz * dz);
+        this.previousPosition.copy(currentPosition);
 
         // --- Input Handling ---
-        let engineForce = 0; let brakeForce = 0; let targetSteering = 0;
+        let engineForce = 0;
+        let brakeForce = 0;
+        let targetSteering = 0;
+
         const forwardPressed = this.inputManager.isPressed('forward');
         const backwardPressed = this.inputManager.isPressed('backward');
         const leftPressed = this.inputManager.isPressed('left');
         const rightPressed = this.inputManager.isPressed('right');
 
-        // Engine and Brake
-        if (forwardPressed) { engineForce = ENGINE_FORCE_FORWARD; }
-        if (backwardPressed) {
+        if (forwardPressed) {
+            engineForce = ENGINE_FORCE_FORWARD;
+        } else if (backwardPressed) {
             const currentSpeed = this.chassisBody.velocity.length();
             const worldVelocity = this.chassisBody.velocity;
             const forwardDir = new CANNON.Vec3();
             this.chassisBody.vectorToWorldFrame(new CANNON.Vec3(1, 0, 0), forwardDir);
-            const dot = forwardDir.dot(worldVelocity);
-            if (dot > 0.5 && currentSpeed > 1.0) { brakeForce = BRAKE_FORCE; engineForce = 0; }
-            else { engineForce = -ENGINE_FORCE_BACKWARD; brakeForce = 0; }
+            const dot = forwardDir.dot(worldVelocity.unit());
+
+            if (dot > 0.1 && currentSpeed > 0.5) {
+                brakeForce = BRAKE_FORCE; engineForce = 0;
+            } else {
+                engineForce = -ENGINE_FORCE_BACKWARD; brakeForce = 0;
+            }
         }
 
-        // Steering Target
         if (leftPressed) { targetSteering = MAX_STEER_ANGLE; }
         else if (rightPressed) { targetSteering = -MAX_STEER_ANGLE; }
         else { targetSteering = 0; }
 
         // --- Smooth Steering ---
-        const steerLerpFactor = STEERING_SPEED * dt;
+        const steerLerpFactor = dampingFactor(0.1, dt);
         this.currentSteering = lerp(this.currentSteering, targetSteering, steerLerpFactor);
         this.currentSteering = Math.max(-MAX_STEER_ANGLE, Math.min(MAX_STEER_ANGLE, this.currentSteering));
 
-        if (this.inputManager.isPressed('reset')) { this.resetPosition(); return; }
-
-        // Apply forces/steering
-        this.vehicle.applyEngineForce(engineForce, 2); this.vehicle.applyEngineForce(engineForce, 3);
-        this.vehicle.setBrake(brakeForce, 0); this.vehicle.setBrake(brakeForce, 1);
-        this.vehicle.setBrake(brakeForce, 2); this.vehicle.setBrake(brakeForce, 3);
+        // --- Apply Physics ---
+        this.vehicle.applyEngineForce(engineForce, 2);
+        this.vehicle.applyEngineForce(engineForce, 3);
+        for (let i = 0; i < this.vehicle.wheelInfos.length; i++) {
+            this.vehicle.setBrake(brakeForce, i);
+        }
         this.vehicle.setSteeringValue(this.currentSteering, 0);
         this.vehicle.setSteeringValue(this.currentSteering, 1);
 
+        // --- Reset (Manual) ---
+        if (this.inputManager.isPressed('reset')) {
+            this.resetPosition();
+            return; // Skip visual update this frame after manual reset
+        }
+
         // --- Update Visuals ---
-        // *** CAR VISUAL CHANGE: Update the Group's position/rotation ***
         this.chassisGroup.position.copy(this.chassisBody.position);
         this.chassisGroup.quaternion.copy(this.chassisBody.quaternion);
 
-        // Update wheel visuals (No change needed here)
         for (let i = 0; i < this.vehicle.wheelInfos.length; i++) {
             this.vehicle.updateWheelTransform(i);
             const transform = this.vehicle.wheelInfos[i].worldTransform;
             const wheelMesh = this.wheelMeshes[i];
-            wheelMesh.position.copy(transform.position);
-            wheelMesh.quaternion.copy(transform.quaternion);
+            if (wheelMesh) {
+                wheelMesh.position.copy(transform.position);
+                wheelMesh.quaternion.copy(transform.quaternion);
+            }
+        }
+    }
+
+    checkFlipCondition(dt) {
+        if (!this.chassisBody) return;
+
+        const localUp = new CANNON.Vec3(0, 1, 0);
+        const worldUp = new CANNON.Vec3();
+        this.chassisBody.vectorToWorldFrame(localUp, worldUp);
+        const worldTrueUp = new CANNON.Vec3(0, 1, 0);
+        const dotProduct = worldUp.dot(worldTrueUp);
+
+        if (dotProduct < FLIP_THRESHOLD_DOT) {
+            if (!this.isFlipped) {
+                this.isFlipped = true;
+                this.timeFlipped = 0;
+                console.log("Vehicle flipped!");
+            }
+            this.timeFlipped += dt;
+
+            if (this.timeFlipped >= FLIP_RESET_DELAY) {
+                console.log("Vehicle flipped too long, auto-resetting...");
+                this.resetPosition(); // Resets isFlipped and timeFlipped internally
+            }
+        } else {
+            if (this.isFlipped) {
+                 console.log("Vehicle recovered from flip.");
+            }
+            this.isFlipped = false;
+            this.timeFlipped = 0;
         }
     }
 
     resetPosition() {
         if (!this.vehicle || !this.chassisBody) return;
-        console.log("Resetting vehicle position");
+        console.log("Resetting vehicle position...");
+
+        // Reset physics state
         this.chassisBody.position.copy(this.startPosCannon);
         this.chassisBody.quaternion.set(0, 0, 0, 1);
         this.chassisBody.velocity.set(0, 0, 0);
         this.chassisBody.angularVelocity.set(0, 0, 0);
+
+        // Reset vehicle controls state
         this.vehicle.applyEngineForce(0, 2); this.vehicle.applyEngineForce(0, 3);
-        this.vehicle.setBrake(BRAKE_FORCE * 2, 0); // Apply brake briefly
-        this.vehicle.setBrake(BRAKE_FORCE * 2, 1);
-        this.vehicle.setBrake(BRAKE_FORCE * 2, 2);
-        this.vehicle.setBrake(BRAKE_FORCE * 2, 3);
         this.vehicle.setSteeringValue(0, 0); this.vehicle.setSteeringValue(0, 1);
         this.currentSteering = 0;
-        this.chassisBody.wakeUp();
+        for (let i = 0; i < this.vehicle.wheelInfos.length; i++) {
+            this.vehicle.setBrake(BRAKE_FORCE * 2, i); // Apply brakes momentarily
+        }
+
+        // Reset flip state
+        this.isFlipped = false;
+        this.timeFlipped = 0;
 
         // Reset distance tracking
         this.totalDistance = 0;
-        this.previousPosition = null;
+        this.previousPosition.copy(this.startPosThree);
 
+        this.chassisBody.wakeUp();
+
+        // Release brakes after a short delay
         setTimeout(() => {
-            if (this.vehicle) {
-                this.vehicle.setBrake(0, 0); this.vehicle.setBrake(0, 1);
-                this.vehicle.setBrake(0, 2); this.vehicle.setBrake(0, 3);
+            if (this.vehicle) { // Check if vehicle still exists
+                for (let i = 0; i < this.vehicle.wheelInfos.length; i++) {
+                    this.vehicle.setBrake(0, i);
+                }
+                console.log("Brakes released after reset.");
             }
-        }, 100);
+        }, 150);
     }
 
     getPosition() {
-        if (!this.chassisBody) { return this.startPosThree || new THREE.Vector3(0,0,0); }
+        if (!this.chassisBody) return this.startPosThree.clone();
         return new THREE.Vector3(
             this.chassisBody.position.x, this.chassisBody.position.y, this.chassisBody.position.z
         );
@@ -588,49 +761,67 @@ export class Vehicle {
 
     getCurrentSpeedKmH() {
         if (!this.chassisBody) return 0;
-        const speedMs = this.chassisBody.velocity.length();
-        return Math.round(speedMs * 3.6);
+        return Math.round(this.chassisBody.velocity.length() * 3.6);
     }
 
     getDistanceTraveled(unit = 'meters') {
-        switch (unit) {
-            case 'kilometers':
-                return (this.totalDistance / 1000).toFixed(2);
-            case 'miles':
-                return (this.totalDistance / 1609.34).toFixed(2);
-            case 'meters':
-            default:
-                return Math.round(this.totalDistance);
+        switch (unit.toLowerCase()) {
+            case 'kilometers': case 'km': return (this.totalDistance / 1000).toFixed(2);
+            case 'miles': case 'mi': return (this.totalDistance / 1609.34).toFixed(2);
+            case 'meters': case 'm': default: return Math.round(this.totalDistance);
         }
+    }
+
+    dispose() {
+        console.log("Disposing vehicle...");
+        if (this.vehicle) this.vehicle.removeFromWorld(this.physicsWorld);
+        if (this.chassisBody) this.physicsWorld.removeBody(this.chassisBody);
+
+        if (this.chassisGroup) {
+            this.scene.remove(this.chassisGroup);
+            this.chassisGroup.traverse(child => {
+                if (child.isMesh) { child.geometry?.dispose(); child.material?.dispose(); }
+            });
+        }
+        this.wheelMeshes.forEach(mesh => {
+            this.scene.remove(mesh);
+            mesh.geometry?.dispose(); mesh.material?.dispose();
+        });
+
+        this.wheelMeshes = []; this.vehicle = null; this.chassisBody = null; this.chassisGroup = null;
     }
 }
 
 
 --- js\World.js ---
 
+// js/World.js
+
 import * as THREE from 'three';
 import * as CANNON from 'cannon-es';
 import { createNoise2D } from 'simplex-noise';
 
-// --- Constants ---
+// --- Terrain Constants ---
 const TERRAIN_SIZE = 800;
-const TERRAIN_RESOLUTION = 150;
+const TERRAIN_RESOLUTION = 128;
 const HALF_SIZE = TERRAIN_SIZE / 2;
 
-// Noise parameters (unchanged)
-const NOISE_HEIGHT_LARGE = 4;
-const NOISE_HEIGHT_MEDIUM = 0.02;
-const NOISE_HEIGHT_SMALL = 0.05;
-const NOISE_SCALE_LARGE = 0.02;
-const NOISE_SCALE_MEDIUM = 0.08;
-const NOISE_SCALE_SMALL = 0.15;
-const ROAD_FLATTEN_FACTOR = 0.15;
+// --- Noise Parameters ---
+const NOISE_HEIGHT_SCALE = 1.0;
+const NOISE_HEIGHT_LARGE = 5 * NOISE_HEIGHT_SCALE;
+const NOISE_HEIGHT_MEDIUM = 0.4 * NOISE_HEIGHT_SCALE;
+const NOISE_HEIGHT_SMALL = 0.1 * NOISE_HEIGHT_SCALE;
+const NOISE_SCALE_LARGE = 0.015;
+const NOISE_SCALE_MEDIUM = 0.06;
+const NOISE_SCALE_SMALL = 0.2;
+const ROAD_FLATTEN_FACTOR = 0.1;
 
+// --- Color Gradient ---
 const COLOR_STOPS = [
     { h: -5, color: new THREE.Color(0x4466aa) }, { h: -0.5, color: new THREE.Color(0x6699cc) },
-    { h: 0, color: new THREE.Color(0xaa9977) }, { h: 1, color: new THREE.Color(0x66aa66) },
-    { h: 3, color: new THREE.Color(0x887766) }, { h: 5, color: new THREE.Color(0xaaaaaa) },
-    { h: 8, color: new THREE.Color(0xffffff) },
+    { h: 0, color: new THREE.Color(0xdec070) }, { h: 1, color: new THREE.Color(0x558844) },
+    { h: 4, color: new THREE.Color(0x776655) }, { h: 7, color: new THREE.Color(0xaaaaaa) },
+    { h: 10, color: new THREE.Color(0xffffff) },
 ];
 
 export class World {
@@ -638,156 +829,122 @@ export class World {
         this.scene = scene;
         this.physicsWorld = physicsWorld;
         this.noise = createNoise2D();
+
         this.terrainMesh = null;
         this.terrainBody = null;
+        this.groundMaterial = null;
+        this.terrainMaterial = null;
 
-        // --- Physics Materials ---
-        this.groundMaterial = new CANNON.Material('ground');
-        const defaultMaterial = this.physicsWorld.defaultMaterial;
+        this.createPhysicsMaterials();
+        this.createVisualMaterial();
+        this.createTerrain();
+        // this.createDebugHelpers();
 
-        // Improve friction and reduce sinking by adjusting contact properties
+        console.log("World initialized.");
+    }
+
+    createPhysicsMaterials() {
+        this.groundMaterial = new CANNON.Material('groundMaterial');
+        // Find the default material used by other objects (like the vehicle)
+        const defaultMaterial = this.physicsWorld.defaultContactMaterial.materials.find(m => m !== this.groundMaterial) || this.physicsWorld.defaultMaterial;
+
+
         const groundDefaultContactMaterial = new CANNON.ContactMaterial(
-            this.groundMaterial, defaultMaterial, {
-                friction: 0.6,           // Increased from 0.4
-                restitution: 0.05,      // Reduced from 0.1
-                contactEquationStiffness: 1e8,   // Add stiffness
-                contactEquationRelaxation: 3     // Add relaxation
+            this.groundMaterial,
+            defaultMaterial,
+            {
+                friction: 1.0,           // High friction
+                restitution: 0.0,        // No bounce
+                contactEquationStiffness: 1e9, // High stiffness
+                contactEquationRelaxation: 3,
+                frictionEquationStiffness: 1e9, // High friction stiffness
+                frictionEquationRelaxation: 3,
             }
         );
         this.physicsWorld.addContactMaterial(groundDefaultContactMaterial);
+        console.log("Physics materials created for World (with increased stiffness/friction).");
+    }
 
-        // --- Visual Material --- (Shared)
+    createVisualMaterial() {
         this.terrainMaterial = new THREE.MeshStandardMaterial({
-            wireframe: false,
             flatShading: false,
-            metalness: 0.1,
+            metalness: 0.05,
             roughness: 0.9,
             vertexColors: true
         });
-
-        // Create the terrain immediately
-        this.createTerrain();
-
-        // Add debug helper for development
-        this.createDebugHelpers();
+        console.log("Visual material created for World.");
     }
 
     update(playerPosition) {
-        // No dynamic loading needed for single terrain
-        // Could add debug visualization if needed here
+        // Static terrain
     }
 
     createDebugHelpers() {
-        // Add a small sphere at origin for reference
         const originHelper = new THREE.Mesh(
-            new THREE.SphereGeometry(0.5, 16, 16),
-            new THREE.MeshBasicMaterial({ color: 0xff0000 })
+            new THREE.SphereGeometry(1, 16, 16),
+            new THREE.MeshBasicMaterial({ color: 0xff0000, wireframe: true })
         );
-        originHelper.position.set(0, 0, 0);
+        originHelper.position.set(0, 0.1, 0);
         this.scene.add(originHelper);
+        const axesHelper = new THREE.AxesHelper(10);
+        this.scene.add(axesHelper);
+        console.log("Debug helpers added.");
     }
 
     createTerrain() {
-        console.log("Generating terrain...");
+        console.log(`Generating terrain (${TERRAIN_RESOLUTION}x${TERRAIN_RESOLUTION})...`);
         const segmentSize = TERRAIN_SIZE / TERRAIN_RESOLUTION;
 
-        // Generate height data first (keep this part)
-        const heightData = this.generateHeightData();
-
-        // 1. Create visual terrain first (almost identical to your current code)
-        console.log("Creating visual mesh...");
         const geometry = new THREE.BufferGeometry();
-
         const vertices = [];
         const indices = [];
         const colors = [];
 
-        // Build vertex grid
+        console.time("VertexGeneration");
         for (let z = 0; z <= TERRAIN_RESOLUTION; z++) {
             for (let x = 0; x <= TERRAIN_RESOLUTION; x++) {
-                // Get world coordinates
                 const worldX = -HALF_SIZE + x * segmentSize;
                 const worldZ = -HALF_SIZE + z * segmentSize;
-
-                // Get height
                 const height = this.calculateHeight(worldX, worldZ);
-
-                // Add vertex
                 vertices.push(worldX, height, worldZ);
-
-                // Set color
                 const color = this.getColorForHeight(height);
                 colors.push(color.r, color.g, color.b);
-
-                // Create triangle indices (same as original)
                 if (x < TERRAIN_RESOLUTION && z < TERRAIN_RESOLUTION) {
-                    const topLeft = z * (TERRAIN_RESOLUTION + 1) + x;
-                    const topRight = topLeft + 1;
-                    const bottomLeft = (z + 1) * (TERRAIN_RESOLUTION + 1) + x;
-                    const bottomRight = bottomLeft + 1;
-
-                    indices.push(topLeft, bottomLeft, topRight);
-                    indices.push(topRight, bottomLeft, bottomRight);
+                    const tl = z * (TERRAIN_RESOLUTION + 1) + x; const tr = tl + 1;
+                    const bl = (z + 1) * (TERRAIN_RESOLUTION + 1) + x; const br = bl + 1;
+                    indices.push(tl, bl, tr); indices.push(tr, bl, br);
                 }
             }
         }
+        console.timeEnd("VertexGeneration");
 
-        // Set geometry attributes
         geometry.setIndex(indices);
         geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
         geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+        console.time("NormalCalculation");
         geometry.computeVertexNormals();
+        console.timeEnd("NormalCalculation");
 
-        // Create visual mesh
         this.terrainMesh = new THREE.Mesh(geometry, this.terrainMaterial);
         this.terrainMesh.receiveShadow = true;
         this.scene.add(this.terrainMesh);
+        console.log("Visual terrain mesh created.");
 
-        // 2. Create physics using TRIMESH instead of Heightfield
-        console.log("Creating physics trimesh...");
-
-        // Extract vertices and indices from the geometry we just created
-        const vertArray = geometry.attributes.position.array;
-        const indexArray = geometry.index.array;
-
-        // Create trimesh shape
-        const trimeshShape = new CANNON.Trimesh(vertArray, indexArray);
+        console.log("Creating physics Trimesh...");
+        console.time("TrimeshCreation");
+        const trimeshVertices = Array.from(vertices);
+        const trimeshIndices = Array.from(indices);
+        const trimeshShape = new CANNON.Trimesh(trimeshVertices, trimeshIndices);
 
         this.terrainBody = new CANNON.Body({
-            mass: 0,  // Static body
-            material: this.groundMaterial,
+            mass: 0,
+            material: this.groundMaterial, // Use the specific ground material
             shape: trimeshShape,
-            collisionFilterGroup: 1,
-            collisionFilterMask: -1
         });
-
-        // Position at origin since vertices are already in world space
         this.terrainBody.position.set(0, 0, 0);
-
-        // Don't allow sleep
-        this.terrainBody.sleepSpeedLimit = -1;
-        this.terrainBody.allowSleep = false;
-
         this.physicsWorld.addBody(this.terrainBody);
-
-        console.log("Terrain created successfully");
-    }
-
-    generateHeightData() {
-        const data = [];
-        const segmentSize = TERRAIN_SIZE / TERRAIN_RESOLUTION;
-
-        // Create heightmap using exact same algorithm for both physics and visual
-        for (let i = 0; i <= TERRAIN_RESOLUTION; i++) {
-            data[i] = [];
-            for (let j = 0; j <= TERRAIN_RESOLUTION; j++) {
-                const worldX = -HALF_SIZE + i * segmentSize;
-                const worldZ = -HALF_SIZE + j * segmentSize;
-                data[i][j] = this.calculateHeight(worldX, worldZ);
-            }
-        }
-
-        return data;
+        console.timeEnd("TrimeshCreation");
+        console.log("Physics Trimesh body created.");
     }
 
     calculateHeight(worldX, worldZ) {
@@ -801,14 +958,12 @@ export class World {
     }
 
     getColorForHeight(height) {
-        let vertColor = new THREE.Color(COLOR_STOPS[0].color);
-        for (let stop = 0; stop < COLOR_STOPS.length - 1; stop++) {
-            const currentStop = COLOR_STOPS[stop];
-            const nextStop = COLOR_STOPS[stop + 1];
+        let vertColor = new THREE.Color().copy(COLOR_STOPS[0].color);
+        for (let i = 0; i < COLOR_STOPS.length - 1; i++) {
+            const currentStop = COLOR_STOPS[i]; const nextStop = COLOR_STOPS[i + 1];
             if (height >= currentStop.h && height < nextStop.h) {
-                const t = (height - currentStop.h) / (nextStop.h - currentStop.h);
-                const clampedT = Math.max(0, Math.min(1, t));
-                vertColor.lerpColors(currentStop.color, nextStop.color, clampedT);
+                const t = Math.max(0, Math.min(1, (height - currentStop.h) / (nextStop.h - currentStop.h)));
+                vertColor.lerpColors(currentStop.color, nextStop.color, t);
                 return vertColor;
             }
         }
@@ -816,6 +971,17 @@ export class World {
             vertColor.copy(COLOR_STOPS[COLOR_STOPS.length - 1].color);
         }
         return vertColor;
+    }
+
+    dispose() {
+        console.log("Disposing world...");
+        if (this.terrainBody) this.physicsWorld.removeBody(this.terrainBody);
+        if (this.terrainMesh) {
+            this.scene.remove(this.terrainMesh);
+            this.terrainMesh.geometry.dispose();
+            // this.terrainMaterial.dispose(); // Only if not shared
+        }
+        this.terrainBody = null; this.terrainMesh = null;
     }
 }
 
@@ -875,8 +1041,17 @@ body {
 
 --- vite.config.js ---
 
-export default {
+// vite.config.js
+import { defineConfig } from 'vite';
+
+export default defineConfig({
   server: {
-    allowedHosts: ['scope-tent-tips-freebsd.trycloudflare.com']
-  }
-};
+    // Make sure this is correct for your development environment if needed
+    // allowedHosts: ['scope-tent-tips-freebsd.trycloudflare.com'],
+    host: true // Allows access from network devices (useful for testing on mobile)
+  },
+  // Optional: Optimize dependencies if needed, Vite usually handles this well
+  // optimizeDeps: {
+  //   include: ['three', 'cannon-es', 'cannon-es-debugger', 'simplex-noise'],
+  // },
+});
