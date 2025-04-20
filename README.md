@@ -14,6 +14,11 @@
 
 This project is a basic 3D car driving simulation built using modern web technologies. It features a car controlled by the player driving on procedurally generated terrain. The project utilizes Three.js for rendering and Cannon-es for physics simulation.
 
+---
+## Demo GIF
+
+Wait for the GIF to load:
+
 ![car](https://github.com/user-attachments/assets/8448e6ec-290a-4b74-8059-ee9f7bfb453e)
 
 
